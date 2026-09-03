@@ -1,0 +1,669 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "مسیر کانکور — API",
+    "description": "API بک‌اند سایت آموزشگاه کانکور. اکثر مسیرها نیازمند توکن JWT هستند (هدر Authorization: Bearer <token>).",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "/api", "description": "نسبی — همان دامنه‌ی فرانت‌اند (پشت پروکسی/nginx)" }
+  ],
+  "tags": [
+    { "name": "auth" },
+    { "name": "branches" },
+    { "name": "courses" },
+    { "name": "videos" },
+    { "name": "tests" },
+    { "name": "payments" },
+    { "name": "teachers" },
+    { "name": "live" },
+    { "name": "forum" },
+    { "name": "notifications" },
+    { "name": "leaderboard" },
+    { "name": "dashboard" },
+    { "name": "admin-stats" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": { "message": { "type": "string" } }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "full_name": { "type": "string" },
+          "email": { "type": "string" },
+          "role": { "type": "string", "enum": ["student", "teacher", "admin"] },
+          "branch_id": { "type": "integer", "nullable": true },
+          "points": { "type": "integer" }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string" },
+          "user": { "$ref": "#/components/schemas/User" }
+        }
+      },
+      "Branch": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "title": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      },
+      "Course": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "subject": { "type": "string" },
+          "branch_id": { "type": "integer", "nullable": true },
+          "teacher_id": { "type": "integer", "nullable": true },
+          "price": { "type": "integer", "description": "قیمت به افغانی؛ ۰ یعنی رایگان" },
+          "price_usd": { "type": "number", "nullable": true, "description": "قیمت جدا به دلار برای پرداخت با کارت (Stripe). اگر خالی باشد، پرداخت با کارت برای این کورس غیرفعال است." },
+          "cover_color": { "type": "string" },
+          "branch_title": { "type": "string" },
+          "teacher_name": { "type": "string" }
+        }
+      },
+      "Video": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "title": { "type": "string" },
+          "duration_seconds": { "type": "integer" },
+          "sort_order": { "type": "integer" }
+        }
+      },
+      "Payment": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "course_id": { "type": "integer" },
+          "amount": { "type": "integer" },
+          "currency": { "type": "string", "example": "AFN", "description": "AFN برای حواله/دستی، USD (یا STRIPE_CURRENCY) برای کارت" },
+          "method": { "type": "string", "enum": ["manual", "card", "bank"] },
+          "status": { "type": "string", "enum": ["pending", "success", "failed"] },
+          "provider_payment_id": { "type": "string" },
+          "created_at": { "type": "string" },
+          "confirmed_at": { "type": "string", "nullable": true }
+        }
+      },
+      "Question": {
+        "type": "object",
+        "required": ["question_text", "options", "correct_index"],
+        "properties": {
+          "question_text": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
+          "correct_index": { "type": "integer" }
+        }
+      },
+      "Notification": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "title": { "type": "string" },
+          "message": { "type": "string" },
+          "type": { "type": "string", "enum": ["info", "payment", "live", "forum", "test"] },
+          "is_read": { "type": "integer" },
+          "created_at": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "توکن ارسال نشده یا نامعتبر است.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "Forbidden": {
+        "description": "نقش کاربر اجازه‌ی این عملیات را نمی‌دهد.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "NotFound": {
+        "description": "منبع مورد نظر یافت نشد.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    }
+  },
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "بررسی سلامت سرور",
+        "security": [],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "ثبت‌نام شاگرد جدید",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["full_name", "email", "password"],
+                "properties": {
+                  "full_name": { "type": "string" },
+                  "email": { "type": "string" },
+                  "password": { "type": "string", "minLength": 6 },
+                  "branch_id": { "type": "integer", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "ثبت‌نام موفق", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } } },
+          "400": { "description": "ورودی نامعتبر", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "ایمیل تکراری", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "ورود",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": { "email": { "type": "string" }, "password": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "ورود موفق", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } } },
+          "401": { "description": "ایمیل یا رمز عبور نادرست" }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "اطلاعات کاربر جاری",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/branches": {
+      "get": {
+        "tags": ["branches"],
+        "summary": "لیست رشته‌ها/صنف‌ها",
+        "security": [],
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Branch" } } } } } }
+      },
+      "post": {
+        "tags": ["branches"],
+        "summary": "ساخت رشته/صنف جدید (فقط ادمین)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "description": { "type": "string" } } } } }
+        },
+        "responses": {
+          "201": { "description": "ساخته شد" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/courses": {
+      "get": {
+        "tags": ["courses"],
+        "summary": "لیست عمومی کورس‌ها",
+        "security": [],
+        "parameters": [{ "name": "branch_id", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Course" } } } } } }
+      },
+      "post": {
+        "tags": ["courses"],
+        "summary": "ساخت کورس جدید (استاد/ادمین)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "description": { "type": "string" },
+                  "subject": { "type": "string" },
+                  "branch_id": { "type": "integer" },
+                  "teacher_id": { "type": "integer", "description": "فقط ادمین می‌تواند تعیین کند" },
+                  "price": { "type": "integer" },
+                  "cover_color": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "ساخته شد" },
+          "400": { "description": "ورودی نامعتبر" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/courses/mine": {
+      "get": {
+        "tags": ["courses"],
+        "summary": "کورس‌های خود استاد (یا همه‌ی کورس‌ها برای ادمین)",
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/courses/{id}": {
+      "get": {
+        "tags": ["courses"],
+        "summary": "جزئیات یک کورس (بدون URL ویدیو/پاسخ آزمون)",
+        "security": [],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/courses/{id}/enrollment": {
+      "get": {
+        "tags": ["courses"],
+        "summary": "وضعیت ثبت‌نام/دسترسی کاربر جاری به این کورس",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+      }
+    },
+    "/courses/{id}/students": {
+      "get": {
+        "tags": ["courses"],
+        "summary": "لیست شاگردان ثبت‌نام‌شده (استاد/ادمین)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/videos/{id}": {
+      "get": {
+        "tags": ["videos"],
+        "summary": "جزئیات ویدیو + پیشرفت تماشا (نیازمند دسترسی به کورس)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Video" } } } },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/videos/upload/{courseId}": {
+      "post": {
+        "tags": ["videos"],
+        "summary": "آپلود ویدیوی جدید برای یک کورس (استاد/ادمین)",
+        "description": "اگر BUNNY_STREAM_LIBRARY_ID و BUNNY_STREAM_API_KEY تنظیم شده باشند، ویدیو مستقیم به Bunny Stream آپلود و url یک آدرس embed از iframe.mediadelivery.net می‌شود. در غیر این صورت روی دیسک محلی سرور (backend/uploads) ذخیره می‌شود.",
+        "parameters": [{ "name": "courseId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "video": { "type": "string", "format": "binary" },
+                  "title": { "type": "string" },
+                  "sort_order": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "آپلود شد" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "502": { "description": "خطا در آپلود به Bunny Stream" }
+        }
+      }
+    },
+    "/videos/{id}/progress": {
+      "post": {
+        "tags": ["videos"],
+        "summary": "ثبت پیشرفت تماشای ویدیو (فقط شاگرد)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "watched_seconds": { "type": "integer" }, "completed": { "type": "boolean" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "ثبت شد" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/tests/{id}": {
+      "get": {
+        "tags": ["tests"],
+        "summary": "سوالات یک آزمون (بدون پاسخ صحیح)، نیازمند دسترسی به کورس",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/tests/{id}/submit": {
+      "post": {
+        "tags": ["tests"],
+        "summary": "ارسال پاسخ‌های آزمون و دریافت نمره (فقط شاگرد)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["answers"],
+                "properties": {
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": { "question_id": { "type": "integer" }, "selected_index": { "type": "integer" } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "نتیجه‌ی آزمون" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/tests": {
+      "post": {
+        "tags": ["tests"],
+        "summary": "ساخت آزمون جدید برای یک کورس (استاد/ادمین)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "course_id", "questions"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "course_id": { "type": "integer" },
+                  "questions": { "type": "array", "items": { "$ref": "#/components/schemas/Question" }, "minItems": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "ساخته شد" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/payments/checkout": {
+      "post": {
+        "tags": ["payments"],
+        "summary": "شروع فرآیند ثبت‌نام/پرداخت یک کورس (فقط شاگرد)",
+        "description": "method='card' یک Stripe Checkout Session واقعی می‌سازد و آدرس آن را در paymentUrl برمی‌گرداند (باید مرورگر به آن هدایت شود)؛ نیازمند STRIPE_SECRET_KEY و course.price_usd. method='manual'/'bank' جریان قبلی (تایید دستی ادمین) را دنبال می‌کند.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["course_id"],
+                "properties": {
+                  "course_id": { "type": "integer" },
+                  "method": { "type": "string", "enum": ["manual", "card", "bank"], "default": "manual" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "کورس رایگان یا ثبت‌نام تکراری/pending موجود" },
+          "201": { "description": "پرداخت pending جدید ساخته شد (برای card شامل paymentUrl واقعی Stripe)" },
+          "400": { "description": "قیمت دلاری کورس تنظیم نشده (فقط برای method=card)" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "503": { "description": "پرداخت با کارت پیکربندی نشده (STRIPE_SECRET_KEY خالی است)" }
+        }
+      }
+    },
+    "/payments/pending": {
+      "get": {
+        "tags": ["payments"],
+        "summary": "لیست پرداخت‌های در انتظار تایید (فقط ادمین)",
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/payments/status/{paymentId}": {
+      "get": {
+        "tags": ["payments"],
+        "summary": "وضعیت یک پرداخت (فقط صاحب پرداخت)",
+        "parameters": [{ "name": "paymentId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Payment" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/payments/webhook": {
+      "post": {
+        "tags": ["payments"],
+        "summary": "Webhook تایید/رد پرداخت از سمت درگاه (بدون JWT — با هدر x-webhook-secret)",
+        "security": [],
+        "parameters": [
+          { "name": "x-webhook-secret", "in": "header", "required": true, "schema": { "type": "string" }, "description": "باید برابر PAYMENT_WEBHOOK_SECRET در .env باشد" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["paymentId", "status"],
+                "properties": { "paymentId": { "type": "integer" }, "status": { "type": "string", "enum": ["success", "failed"] } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "پردازش شد" },
+          "401": { "description": "secret نادرست" },
+          "503": { "description": "PAYMENT_WEBHOOK_SECRET تنظیم نشده است" }
+        }
+      }
+    },
+    "/payments/stripe-webhook": {
+      "post": {
+        "tags": ["payments"],
+        "summary": "Webhook واقعی Stripe (بدون JWT — امضا با هدر stripe-signature تایید می‌شود)",
+        "description": "در Stripe Dashboard باید روی رویدادهای checkout.session.completed و checkout.session.async_payment_failed/expired تنظیم شود. بدنه باید خام (raw) به Stripe SDK برسد.",
+        "security": [],
+        "parameters": [
+          { "name": "stripe-signature", "in": "header", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "پردازش شد" },
+          "400": { "description": "امضا نامعتبر" },
+          "503": { "description": "STRIPE_SECRET_KEY یا STRIPE_WEBHOOK_SECRET تنظیم نشده است" }
+        }
+      }
+    },
+    "/payments/{paymentId}/approve": {
+      "post": {
+        "tags": ["payments"],
+        "summary": "تایید دستی پرداخت توسط ادمین",
+        "parameters": [{ "name": "paymentId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "تایید شد" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/payments/{paymentId}/reject": {
+      "post": {
+        "tags": ["payments"],
+        "summary": "رد دستی پرداخت توسط ادمین",
+        "parameters": [{ "name": "paymentId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "رد شد" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/payments/history": {
+      "get": {
+        "tags": ["payments"],
+        "summary": "تاریخچه‌ی پرداخت‌های کاربر جاری (فقط شاگرد)",
+        "responses": { "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Payment" } } } } } }
+      }
+    },
+    "/teachers": {
+      "get": {
+        "tags": ["teachers"],
+        "summary": "لیست استادان (فقط ادمین)",
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      },
+      "post": {
+        "tags": ["teachers"],
+        "summary": "ساخت حساب استاد جدید (فقط ادمین)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["full_name", "email", "password"],
+                "properties": { "full_name": { "type": "string" }, "email": { "type": "string" }, "password": { "type": "string", "minLength": 6 } }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "ساخته شد" }, "409": { "description": "ایمیل تکراری" } }
+      }
+    },
+    "/live/course/{courseId}": {
+      "get": {
+        "tags": ["live"],
+        "summary": "لیست کلاس‌های زنده‌ی یک کورس",
+        "parameters": [{ "name": "courseId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/live": {
+      "post": {
+        "tags": ["live"],
+        "summary": "ساخت کلاس آنلاین زنده‌ی جدید (استاد/ادمین)، از Jitsi Meet استفاده می‌کند",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["course_id", "title", "scheduled_at"],
+                "properties": { "course_id": { "type": "integer" }, "title": { "type": "string" }, "scheduled_at": { "type": "string", "format": "date-time" } }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "ساخته شد" }, "400": { "description": "ورودی نامعتبر" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/forum/course/{courseId}": {
+      "get": {
+        "tags": ["forum"],
+        "summary": "موضوعات انجمن یک کورس",
+        "parameters": [{ "name": "courseId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      },
+      "post": {
+        "tags": ["forum"],
+        "summary": "ساخت موضوع جدید در انجمن کورس",
+        "parameters": [{ "name": "courseId", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string", "maxLength": 200 }, "body": { "type": "string" } } } } }
+        },
+        "responses": { "201": { "description": "ساخته شد" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/forum/thread/{id}": {
+      "get": {
+        "tags": ["forum"],
+        "summary": "جزئیات یک موضوع انجمن + پاسخ‌ها",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" }, "404": { "$ref": "#/components/responses/NotFound" } }
+      }
+    },
+    "/forum/thread/{id}/reply": {
+      "post": {
+        "tags": ["forum"],
+        "summary": "پاسخ به یک موضوع انجمن",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["message"], "properties": { "message": { "type": "string", "maxLength": 5000 } } } } }
+        },
+        "responses": { "201": { "description": "ثبت شد" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "tags": ["notifications"],
+        "summary": "آخرین ۳۰ اعلان کاربر جاری + تعداد نخوانده‌ها",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": { "type": "array", "items": { "$ref": "#/components/schemas/Notification" } },
+                    "unreadCount": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notifications/read-all": {
+      "post": {
+        "tags": ["notifications"],
+        "summary": "علامت‌گذاری همه‌ی اعلان‌های کاربر جاری به عنوان خوانده‌شده",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/leaderboard": {
+      "get": {
+        "tags": ["leaderboard"],
+        "summary": "لیدربورد کلی یا بر اساس رشته",
+        "parameters": [{ "name": "branch_id", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/dashboard": {
+      "get": {
+        "tags": ["dashboard"],
+        "summary": "داشبورد شاگرد: پیشرفت کورس‌ها، نتایج آزمون، امتیاز و رتبه (فقط شاگرد)",
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    },
+    "/admin-stats": {
+      "get": {
+        "tags": ["admin-stats"],
+        "summary": "آمار کلی سایت برای ادمین: شاگردان/استادان/کورس‌ها/درآمد به تفکیک",
+        "responses": { "200": { "description": "OK" }, "403": { "$ref": "#/components/responses/Forbidden" } }
+      }
+    }
+  }
+}

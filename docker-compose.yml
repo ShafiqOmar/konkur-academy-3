@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      - DB_DIR=/app/data
+    volumes:
+      - backend_data:/app/data
+      - backend_uploads:/app/uploads
+    ports:
+      - "4000:4000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+  backend_uploads:
